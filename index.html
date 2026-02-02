@@ -358,7 +358,7 @@
                     <button class="btn-secondary" onclick="clearInput()">🗑️ Effacer</button>
                 </div>
                 <div class="info-box">
-                    <strong>Astuce:</strong> Copiez directement depuis votre email ou Excel. L'outil détecte automatiquement les numéros SO dans la colonne "Order Name". <a class="example-link" onclick="loadExample()">Charger un exemple</a>
+                    <strong>Astuce:</strong> Copiez directement depuis votre email ou Excel. L'outil extrait automatiquement les IDs de la première colonne. <a class="example-link" onclick="loadExample()">Charger un exemple</a>
                 </div>
             </div>
 
@@ -379,7 +379,7 @@
                 <div class="stats">
                     <div class="stat">
                         <div class="stat-value" id="soCount">0</div>
-                        <div class="stat-label">SO détectés</div>
+                        <div class="stat-label">IDs détectés</div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="lineCount">0</div>
@@ -393,29 +393,47 @@
     <div class="notification" id="notification">✓ Copié dans le presse-papier!</div>
 
     <script>
-        function extractSONumbers(text) {
-            // Pattern pour détecter les numéros SO (ex: SO2026/7205726)
-            const soPattern = /SO\d{4}\/\d+/g;
-            const matches = text.match(soPattern);
+        function extractIDs(text) {
+            const ids = [];
+            const lines = text.split('\n');
             
-            // Retourne un tableau unique de SO
-            return matches ? [...new Set(matches)] : [];
+            for (const line of lines) {
+                // Ignorer les lignes vides ou d'en-tête
+                if (!line.trim() || line.includes('Order Name') || line.includes('Total:') || line.includes('ID')) {
+                    continue;
+                }
+                
+                // Séparer les colonnes (tabulation ou espaces multiples)
+                const columns = line.split(/\t+|\s{2,}/).filter(col => col.trim());
+                
+                if (columns.length === 0) continue;
+                
+                const id = columns[0].trim();
+                
+                // Vérifier que c'est bien un nombre
+                if (/^\d+$/.test(id)) {
+                    ids.push(id);
+                }
+            }
+            
+            // Retourne un tableau unique d'IDs
+            return [...new Set(ids)];
         }
 
         function convertData() {
             const input = document.getElementById('inputData').value;
-            const soNumbers = extractSONumbers(input);
+            const ids = extractIDs(input);
             
-            if (soNumbers.length === 0) {
-                alert('❌ Aucun numéro SO détecté. Vérifiez que vos données contiennent des numéros au format SO2026/XXXXXXX');
+            if (ids.length === 0) {
+                alert('❌ Aucun ID détecté. Vérifiez que vos données contiennent une colonne ID avec des nombres.');
                 return;
             }
 
-            // Construire le format Odoo
-            const conditions = soNumbers.map(so => `("name", "=", "${so}")`);
+            // Construire le format Odoo avec IDs
+            const conditions = ids.map(id => `("id", "=", ${id})`);
             
             // Créer les séparateurs OR
-            const orSeparators = Array(soNumbers.length - 1).fill('"|"');
+            const orSeparators = Array(ids.length - 1).fill('"|"');
             
             // Construire la liste complète
             const odooFilter = '[' + [...orSeparators, ...conditions].join(', ') + ']';
@@ -424,7 +442,7 @@
             document.getElementById('outputData').value = odooFilter;
             
             // Mettre à jour les stats
-            document.getElementById('soCount').textContent = soNumbers.length;
+            document.getElementById('soCount').textContent = ids.length;
             document.getElementById('lineCount').textContent = input.split('\n').filter(line => line.trim()).length;
 
             // Animation de succès
@@ -468,7 +486,10 @@
 7288071	SO2026/7310269	3_progress	0.5%	0.8	N/A	31.1€	0.12€
 7256487	SO2026/7278691	3_progress	0.5%	0.8	2026-01-28	18.6€	0.07€
 7201226	SO2026/7223444	3_progress	0.5%	1.0	2026-01-13	24.9€	0.12€
-7197446	SO2026/7219664	3_progress	0.5%	1.0	2026-01-13	24.9€	0.12€`;
+7197446	SO2026/7219664	3_progress	0.5%	1.0	2026-01-13	24.9€	0.12€
+4775009	SO2024/4699912	3_progress	0.5%	1.25	N/A	24.9€	0.16€
+222387	mig SaaS Subscriptio	6_churn	0.5%	0.8	N/A	46.8€	0.19€
+221912	mig SaaS Subscriptio	3_progress	0.5%	0.8	N/A	62.2€	0.25€`;
             
             document.getElementById('inputData').value = exampleData;
             convertData();
