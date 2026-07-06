@@ -333,13 +333,81 @@
             color: var(--secondary);
             text-decoration: underline;
         }
+
+        .mode-selector {
+            display: flex;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 10px 12px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            overflow: visible;
+        }
+
+        .mode-btn::before {
+            display: none;
+        }
+
+        .mode-btn:hover {
+            border-color: var(--primary);
+            color: var(--text-main);
+        }
+
+        .mode-btn.active {
+            background: var(--bg-light);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 0 0 1px var(--primary) inset;
+        }
+
+        .mode-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 20px;
+            margin-bottom: 6px;
+        }
+
+        .field-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-bottom: 15px;
+        }
+
+        .field-badge .field-name {
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .field-badge.text .field-name {
+            color: var(--secondary);
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Odoo SO Converter</h1>
-            <p class="subtitle">Convertisseur de tableaux pour filtres Odoo</p>
+            <p class="subtitle">Tableau ou liste vers filtre Odoo, détection auto ID / référence client</p>
         </header>
 
         <div class="main-grid">
@@ -349,16 +417,22 @@
                     <div class="panel-icon">📥</div>
                     <h2 class="panel-title">Données source</h2>
                 </div>
-                <textarea 
-                    id="inputData" 
-                    placeholder="Collez ici vos données de tableau...&#10;&#10;Exemple:&#10;ID    Order Name    State&#10;1234567    SO2026/xxxxxxx    3_progress&#10;7654321    SO2026/xxxxxxx    3_progress"
+                <textarea
+                    id="inputData"
+                    placeholder="Collez un tableau ou une simple liste...&#10;&#10;Exemple ID (numérique):&#10;7183501    SO2026/7205726    3_progress&#10;7288071    SO2026/7310269    3_progress&#10;&#10;Exemple référence client (texte):&#10;M241217196837766&#10;M241217196837767"
                 ></textarea>
+                <div class="mode-label">Champ ciblé</div>
+                <div class="mode-selector">
+                    <button class="mode-btn active" data-mode="auto" onclick="setMode('auto')">Auto</button>
+                    <button class="mode-btn" data-mode="id" onclick="setMode('id')">id (SO)</button>
+                    <button class="mode-btn" data-mode="client_order_ref" onclick="setMode('client_order_ref')">Réf. client</button>
+                </div>
                 <div class="button-group">
                     <button class="btn-primary" onclick="convertData()">🔄 Convertir</button>
                     <button class="btn-secondary" onclick="clearInput()">🗑️ Effacer</button>
                 </div>
                 <div class="info-box">
-                    <strong>Astuce:</strong> Copiez directement depuis votre email ou Excel. L'outil extrait automatiquement les IDs de la première colonne. <a class="example-link" onclick="loadExample()">Charger un exemple</a>
+                    <strong>Astuce:</strong> Copiez depuis votre email, Excel ou une vue Odoo. En <strong>Auto</strong>, l'outil devine le champ : valeurs 100% numériques → <code>id</code>, sinon → <code>client_order_ref</code>. Exemples : <a class="example-link" onclick="loadExample('id')">SO / ID</a> · <a class="example-link" onclick="loadExample('client_order_ref')">référence client</a>
                 </div>
             </div>
 
@@ -368,8 +442,11 @@
                     <div class="panel-icon">📤</div>
                     <h2 class="panel-title">Filtre Odoo</h2>
                 </div>
-                <textarea 
-                    id="outputData" 
+                <div class="field-badge" id="fieldBadge" style="display: none;">
+                    Champ : <span class="field-name" id="fieldName">—</span>
+                </div>
+                <textarea
+                    id="outputData"
                     placeholder="Le résultat apparaîtra ici..."
                     readonly
                 ></textarea>
@@ -379,7 +456,7 @@
                 <div class="stats">
                     <div class="stat">
                         <div class="stat-value" id="soCount">0</div>
-                        <div class="stat-label">IDs détectés</div>
+                        <div class="stat-label">Valeurs détectées</div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="lineCount">0</div>
@@ -393,56 +470,104 @@
     <div class="notification" id="notification">✓ Copié dans le presse-papier!</div>
 
     <script>
-        function extractIDs(text) {
-            const ids = [];
-            const lines = text.split('\n');
-            
-            for (const line of lines) {
-                // Ignorer les lignes vides ou d'en-tête
-                if (!line.trim() || line.includes('Order Name') || line.includes('Total:') || line.includes('ID')) {
-                    continue;
+        // Mode courant du champ ciblé: 'auto' | 'id' | 'client_order_ref'
+        let currentMode = 'auto';
+
+        // Libellés de colonnes/en-têtes à ignorer (cellule = token exact, insensible à la casse)
+        const HEADER_TOKENS = new Set([
+            'id', 'order name', 'state', 'markup %', 'markup', 'acc.', 'acc',
+            'transition date', 'contract value', 'target', 'name', 'company',
+            'customer reference', 'référence client', 'reference client',
+            'référence', 'reference', 'ref'
+        ]);
+
+        // Une cellule est une valeur exploitable si : pas d'espace, caractères
+        // alphanumériques (avec . _ - /), au moins un chiffre, et pas un libellé connu.
+        function isValueCell(cell) {
+            const c = cell.trim();
+            if (!/^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/.test(c)) return false;
+            if (!/\d/.test(c)) return false;
+            if (HEADER_TOKENS.has(c.toLowerCase())) return false;
+            return true;
+        }
+
+        // Extrait la première valeur exploitable de chaque ligne (tableau OU liste).
+        function extractValues(text) {
+            const values = [];
+            for (const rawLine of text.split('\n')) {
+                const line = rawLine.trim();
+                if (!line || line.toLowerCase().includes('total:')) continue;
+
+                // Découpage principal : tabulations ou espaces multiples (colonnes)
+                let cells = line.split(/\t+|\s{2,}/).map(c => c.trim()).filter(Boolean);
+                let value = cells.find(isValueCell);
+
+                // Repli : ligne "libellé valeur" séparée par des espaces simples
+                if (!value) {
+                    cells = line.split(/\s+/).map(c => c.trim()).filter(Boolean);
+                    value = cells.find(isValueCell);
                 }
-                
-                // Séparer les colonnes (tabulation ou espaces multiples)
-                const columns = line.split(/\t+|\s{2,}/).filter(col => col.trim());
-                
-                if (columns.length === 0) continue;
-                
-                const id = columns[0].trim();
-                
-                // Vérifier que c'est bien un nombre
-                if (/^\d+$/.test(id)) {
-                    ids.push(id);
-                }
+
+                if (value) values.push(value);
             }
-            
-            // Retourne un tableau unique d'IDs
-            return [...new Set(ids)];
+            // Tableau unique (déduplication)
+            return [...new Set(values)];
+        }
+
+        // Détermine le champ Odoo à cibler selon le mode et les valeurs.
+        function resolveField(values) {
+            if (currentMode !== 'auto') return currentMode;
+            // Auto : 100% numérique => id, sinon => client_order_ref
+            const allNumeric = values.every(v => /^\d+$/.test(v));
+            return allNumeric ? 'id' : 'client_order_ref';
+        }
+
+        // Construit le domaine Odoo (notation polonaise, séparateurs OR en préfixe).
+        function buildDomain(values, field) {
+            const conditions = values.map(v => {
+                if (field === 'id') return `("id", "=", ${v})`;
+                // Champ texte : valeur entre guillemets, échappement de sécurité
+                const safe = String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                return `("${field}", "=", "${safe}")`;
+            });
+            const orSeparators = Array(Math.max(values.length - 1, 0)).fill('"|"');
+            return '[' + [...orSeparators, ...conditions].join(', ') + ']';
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
+            // Reconvertir à la volée si des données sont déjà présentes
+            if (document.getElementById('inputData').value.trim()) {
+                convertData();
+            }
         }
 
         function convertData() {
             const input = document.getElementById('inputData').value;
-            const ids = extractIDs(input);
-            
-            if (ids.length === 0) {
-                alert('❌ Aucun ID détecté. Vérifiez que vos données contiennent une colonne ID avec des nombres.');
+            const values = extractValues(input);
+
+            if (values.length === 0) {
+                alert('❌ Aucune valeur détectée. Collez des IDs ou des références (une valeur par ligne, ou une colonne de tableau).');
                 return;
             }
 
-            // Construire le format Odoo avec IDs
-            const conditions = ids.map(id => `("id", "=", ${id})`);
-            
-            // Créer les séparateurs OR
-            const orSeparators = Array(ids.length - 1).fill('"|"');
-            
-            // Construire la liste complète
-            const odooFilter = '[' + [...orSeparators, ...conditions].join(', ') + ']';
-            
+            const field = resolveField(values);
+            const odooFilter = buildDomain(values, field);
+
             // Afficher le résultat
             document.getElementById('outputData').value = odooFilter;
-            
+
+            // Badge du champ détecté (teal pour id, orange pour un champ texte)
+            const badge = document.getElementById('fieldBadge');
+            badge.style.display = 'inline-flex';
+            badge.classList.toggle('text', field !== 'id');
+            document.getElementById('fieldName').textContent = field;
+
             // Mettre à jour les stats
-            document.getElementById('soCount').textContent = ids.length;
+            document.getElementById('soCount').textContent = values.length;
             document.getElementById('lineCount').textContent = input.split('\n').filter(line => line.trim()).length;
 
             // Animation de succès
@@ -458,6 +583,7 @@
             document.getElementById('outputData').value = '';
             document.getElementById('soCount').textContent = '0';
             document.getElementById('lineCount').textContent = '0';
+            document.getElementById('fieldBadge').style.display = 'none';
         }
 
         function copyToClipboard() {
@@ -480,8 +606,8 @@
             }, 2000);
         }
 
-        function loadExample() {
-            const exampleData = `ID	Order Name	State	Markup %	Acc.	Transition Date	Contract Value	Target
+        const EXAMPLES = {
+            id: `ID	Order Name	State	Markup %	Acc.	Transition Date	Contract Value	Target
 7183501	SO2026/7205726	3_progress	0.5%	0.8	N/A	514.8€	2.06€
 7288071	SO2026/7310269	3_progress	0.5%	0.8	N/A	31.1€	0.12€
 7256487	SO2026/7278691	3_progress	0.5%	0.8	2026-01-28	18.6€	0.07€
@@ -489,10 +615,19 @@
 7197446	SO2026/7219664	3_progress	0.5%	1.0	2026-01-13	24.9€	0.12€
 4775009	SO2024/4699912	3_progress	0.5%	1.25	N/A	24.9€	0.16€
 222387	mig SaaS Subscriptio	6_churn	0.5%	0.8	N/A	46.8€	0.19€
-221912	mig SaaS Subscriptio	3_progress	0.5%	0.8	N/A	62.2€	0.25€`;
-            
-            document.getElementById('inputData').value = exampleData;
-            convertData();
+221912	mig SaaS Subscriptio	3_progress	0.5%	0.8	N/A	62.2€	0.25€`,
+            client_order_ref: `Customer Reference
+M241217196837766
+M241217196837767
+M241217196837768
+M241217196837769`
+        };
+
+        function loadExample(kind) {
+            const key = kind === 'client_order_ref' ? 'client_order_ref' : 'id';
+            document.getElementById('inputData').value = EXAMPLES[key];
+            // Repasse en Auto pour illustrer la détection, puis convertit
+            setMode('auto');
         }
 
         // Raccourci clavier: Ctrl+Enter pour convertir
